@@ -14,7 +14,7 @@ Built for iPhone/iPad Pro (12 Pro or newer — LiDAR required).
 | Requirement | Where it lives | Approach |
 |---|---|---|
 | Scan the closet with cameras + sensors | **Scan** tab | Apple **RoomPlan** drives the camera + LiDAR to reconstruct room architecture in real time. |
-| Digitally remove/hide existing contents | **Scan** tab → result | RoomPlan separates *architecture* (walls/floor/ceiling) from *objects* (clutter). The reconstruction renders both, with a **show/hide-contents toggle** to make the clutter vanish live, and a **walls-only USDZ export** so the exported file is genuinely empty. |
+| Digitally remove/hide existing contents | **Scan** tab → result | RoomPlan separates *architecture* (walls, floor, doors, windows, openings) from *objects* (clutter). The reconstruction renders both, with a **show/hide-contents toggle** to make the clutter vanish live, and an **architecture-only USDZ export** so the exported file is genuinely empty. |
 | Calculate & display dimensions | **Scan** tab → result | Width × Depth × Height computed from the captured walls, shown in feet-inches-sixteenths and cm, plus per-wall lengths — with the scale calibration applied. |
 | 1/16" accuracy + validation | **Ruler** + **Validation** tabs | LiDAR raycast measurement with outlier-rejected median filtering, live stability readout, and a **known-length scale calibration**; an on-device harness logs measured-vs-tape-measure error and reports % within 1/16". Full protocol in [`VALIDATION.md`](VALIDATION.md). |
 | Live demo from iPhone | whole app | Native app; runs live on-device. Demo script below. |
@@ -61,11 +61,13 @@ If Xcode rejects it, create the project fresh — the source is 100% reusable:
 1. **Scan tab.** Stand in the closet doorway. Slowly pan the phone across each
    wall, then the floor and ceiling. Watch RoomPlan trace the surfaces. Tap
    **Finish Scan**.
-2. **Empty room.** The result sheet shows the reconstructed closet. Flip the
-   **Contents removed** toggle to make the detected clutter appear/vanish — that's
-   the "digitally remove the contents" step, live. Drag to orbit, pinch to zoom,
-   read off Width / Depth / Height. Tap **Export empty room (USDZ)** (walls-only)
-   and open it in Quick Look.
+2. **Empty room.** The result sheet shows the reconstructed closet — walls, floor,
+   and any door/window/opening. Flip the **Contents removed** toggle to make the
+   detected clutter appear/vanish — that's the "digitally remove the contents"
+   step, live. Drag to orbit, pinch to zoom, read off Width / Depth / Height. Tap
+   **Export empty room (USDZ)** (architecture-only) and open it in Quick Look.
+   Dismiss the sheet and the camera restarts automatically (**New Scan** re-scans
+   any time).
 3. **Calibrate (do this first for accuracy).** On the **Ruler** tab, measure a
    known reference (e.g., a 24" machinist rule): Set A, Set B, then ⋯ →
    **Calibrate from this reading**, enter 24.000. A "calibrated +x.xx%" chip
@@ -74,9 +76,9 @@ If Xcode rejects it, create the project fresh — the source is 100% reusable:
    the opposite corner, tap **Set B**. Read the distance to 1/16". The **±mm**
    chip shows live stability (green ≤ 2 mm) then committed confidence.
 5. **Validation tab.** Measure a known length, ⋯ → **Log for validation**, type
-   the true value. The tab shows live **% within 1/16"**, mean/RMS/max error, and
-   bias. Do a few before and after calibrating to show the improvement; export CSV
-   as the evidence.
+   the true value — fractions welcome (`23 7/16`) or decimal (`23.4375`). The tab
+   shows live **% within 1/16"**, mean/RMS/max error, and bias. Do a few before
+   and after calibrating to show the improvement; export CSV as the evidence.
 
 ---
 
@@ -91,7 +93,7 @@ ClosetScanner/
     RoomScanScreen.swift        Live RoomPlan capture UI
     RoomScanModel.swift         Capture-session lifecycle + delegate
     RoomDimensions.swift        Width/Depth/Height from captured walls
-    EmptyRoomSceneView.swift    Reconstruction + contents toggle + walls-only builder
+    EmptyRoomSceneView.swift    Reconstruction + contents toggle + architecture-only builder
     ScanResultScreen.swift      Dimensions + toggle + empty USDZ export
   Measure/
     RulerEngine.swift           LiDAR raycast + MAD outlier rejection + confidence
