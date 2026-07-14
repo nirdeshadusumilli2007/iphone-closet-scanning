@@ -52,6 +52,19 @@ enum ImperialLength {
         format(meters: totalInches / inchesPerMeter)
     }
 
+    static let squareFeetPerSquareMeter = 10.763910416709722
+    static let cubicFeetPerCubicMeter = 35.31466672148859
+
+    /// e.g. 2.32 m² -> "25.0 sq ft  ·  2.32 m²"
+    static func formatArea(squareMeters: Double) -> String {
+        String(format: "%.1f sq ft  ·  %.2f m²", squareMeters * squareFeetPerSquareMeter, squareMeters)
+    }
+
+    /// e.g. 5.1 m³ -> "180.1 cu ft  ·  5.10 m³"
+    static func formatVolume(cubicMeters: Double) -> String {
+        String(format: "%.1f cu ft  ·  %.2f m³", cubicMeters * cubicFeetPerCubicMeter, cubicMeters)
+    }
+
     /// Parse a user-entered length in inches, the way people read tape measures.
     /// Accepts decimals ("23.4375") and mixed fractions ("23 7/16", "23-7/16",
     /// "7/16"), with an optional trailing inch mark. Returns nil for anything

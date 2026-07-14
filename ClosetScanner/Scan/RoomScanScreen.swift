@@ -7,6 +7,9 @@ import ARKit
 /// its *contents* (`objects`). Because we render only the architecture, the
 /// closet's clutter is inherently excluded — that is our "digitally remove the
 /// existing contents" step.
+///
+/// Flow: pick a closet type (Reach-in / Walk-in / Auto) → Start Scan → coached
+/// capture → Finish (process) or Cancel (discard).
 struct RoomScanScreen: View {
     @StateObject private var model = RoomScanModel()
 
@@ -21,43 +24,98 @@ struct RoomScanScreen: View {
                 ZStack(alignment: .bottom) {
                     RoomCaptureRepresentable(model: model)
                         .ignoresSafeArea()
-                    controls
+                    if model.isScanning || model.isProcessing {
+                        scanControls
+                    } else {
+                        startPanel
+                    }
                 }
             }
         }
         .navigationTitle("Closet Scan")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { model.start() }     // restart when returning to this tab
-        .onDisappear { model.stop() }   // release the camera for the Ruler tab
-        .sheet(item: $model.result, onDismiss: { model.start() }) { result in
+        .onDisappear { model.cancel() }   // release the camera for the Ruler tab
+        .sheet(item: $model.result) { result in
             ScanResultScreen(result: result)
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 12) {
-            Text(model.statusText)
-                .font(.callout.weight(.semibold))
+    /// Idle state: closet-type picker + start button, covering the (stopped) camera view.
+    private var startPanel: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "door.left.hand.open")
+                .font(.system(size: 44))
+                .foregroundStyle(.teal)
+            Text("Scan your closet")
+                .font(.title2.bold())
+
+            Picker("Closet type", selection: $model.mode) {
+                ForEach(ClosetMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(model.mode.detail)
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(10)
-                .background(.ultraThinMaterial, in: Capsule())
+                .frame(minHeight: 64, alignment: .top)
+
+            Button(action: model.start) {
+                Label("Start Scan", systemImage: "camera.viewfinder")
+                    .font(.title3.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding()
+            }
+            .buttonStyle(.borderedProminent)
+
+            if model.statusText.hasPrefix("Scan error") {
+                Text(model.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+
+    /// Active state: coaching text + Finish / Cancel while scanning, or a
+    /// processing indicator while RoomPlan builds the model.
+    private var scanControls: some View {
+        VStack(spacing: 12) {
+            if !model.statusText.isEmpty {
+                Text(model.statusText)
+                    .font(.callout.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
 
             if model.isScanning {
-                Button(action: model.finish) {
-                    Label("Finish Scan", systemImage: "checkmark.circle.fill")
-                        .font(.title3.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding()
+                HStack(spacing: 12) {
+                    Button(action: model.finish) {
+                        Label("Finish Scan", systemImage: "checkmark.circle.fill")
+                            .font(.title3.bold())
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button(action: model.cancel) {
+                        Text("Cancel")
+                            .font(.headline)
+                            .padding()
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-            } else if !model.isProcessing {
-                Button(action: model.start) {
-                    Label("New Scan", systemImage: "arrow.clockwise.circle.fill")
-                        .font(.title3.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                }
-                .buttonStyle(.borderedProminent)
+            } else if model.isProcessing {
+                ProgressView()
+                    .padding(.bottom, 8)
             }
         }
         .padding()
@@ -71,7 +129,6 @@ struct RoomCaptureRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> RoomCaptureView {
         let view = RoomCaptureView(frame: .zero)
         model.attach(view)
-        model.start()
         return view
     }
 

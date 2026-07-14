@@ -1,11 +1,26 @@
-# ClosetScanner
+# ClosetScanner ("EmptyCloset")
 
 A native iOS app that scans a physical closet with an iPhone's camera + LiDAR,
 reconstructs it as a **clean, empty 3D space**, reports its **dimensions**, and
 provides a **high-precision AR ruler** with a **built-in accuracy-validation
 harness** targeting **1/16"** resolution.
 
-Built for iPhone/iPad Pro (12 Pro or newer — LiDAR required).
+Supports **both closet types**, with mode-adaptive capture and reporting:
+
+- **Reach-in** — scanned from the doorway; reported as width × depth × height
+  (to 1/16" plus decimal inches), opening width, floor area, and volume.
+- **Walk-in** — scanned from inside; L/U shapes, returns, and angled corners are
+  the norm, so it is *not* collapsed to a single W × D. Instead: a **top-down 2D
+  floor plan** with numbered wall segments, **footprint area**, bounding box,
+  **per-wall lengths** keyed to the plan, **ceiling height min–max** (sloped
+  ceilings), labeled **doors/openings**, and **incomplete-scan warnings** (e.g.
+  an unclosed floor outline).
+- **Auto-detect** — scans first, then decides: if the device was inside the
+  closed floor outline at finish (point-in-polygon test on the device pose), or
+  the footprint is room-sized, it's a walk-in. Manual override always available.
+
+Built for iPhone/iPad Pro (12 Pro or newer — LiDAR required). Unsupported
+devices get a clear explanation screen, never a crash.
 
 ---
 
@@ -15,7 +30,7 @@ Built for iPhone/iPad Pro (12 Pro or newer — LiDAR required).
 |---|---|---|
 | Scan the closet with cameras + sensors | **Scan** tab | Apple **RoomPlan** drives the camera + LiDAR to reconstruct room architecture in real time. |
 | Digitally remove/hide existing contents | **Scan** tab → result | RoomPlan separates *architecture* (walls, floor, doors, windows, openings) from *objects* (clutter). The reconstruction renders both, with a **show/hide-contents toggle** to make the clutter vanish live, and an **architecture-only USDZ export** so the exported file is genuinely empty. |
-| Calculate & display dimensions | **Scan** tab → result | Width × Depth × Height computed from the captured walls, shown in feet-inches-sixteenths and cm, plus per-wall lengths — with the scale calibration applied. |
+| Calculate & display dimensions | **Scan** tab → result | Mode-adaptive: reach-in gets W × D × H (1/16" + decimal inches), area, and volume; walk-in gets a 2D floor plan, footprint area, per-wall segment lengths, ceiling min–max, and labeled doors/openings — all with the scale calibration applied. |
 | 1/16" accuracy + validation | **Ruler** + **Validation** tabs | LiDAR raycast measurement with outlier-rejected median filtering, live stability readout, and a **known-length scale calibration**; an on-device harness logs measured-vs-tape-measure error and reports % within 1/16". Full protocol in [`VALIDATION.md`](VALIDATION.md). |
 | Live demo from iPhone | whole app | Native app; runs live on-device. Demo script below. |
 
@@ -58,16 +73,19 @@ If Xcode rejects it, create the project fresh — the source is 100% reusable:
 
 ## Live demo script (≈2 minutes)
 
-1. **Scan tab.** Stand in the closet doorway. Slowly pan the phone across each
-   wall, then the floor and ceiling. Watch RoomPlan trace the surfaces. Tap
-   **Finish Scan**.
-2. **Empty room.** The result sheet shows the reconstructed closet — walls, floor,
-   and any door/window/opening. Flip the **Contents removed** toggle to make the
-   detected clutter appear/vanish — that's the "digitally remove the contents"
-   step, live. Drag to orbit, pinch to zoom, read off Width / Depth / Height. Tap
-   **Export empty room (USDZ)** (architecture-only) and open it in Quick Look.
-   Dismiss the sheet and the camera restarts automatically (**New Scan** re-scans
-   any time).
+1. **Scan tab.** Pick the closet type — **Reach-in**, **Walk-in**, or **Auto** —
+   and tap **Start Scan**. Reach-in: stand at the doorway and pan across each
+   wall, the floor, and the ceiling. Walk-in: step inside and slowly circle the
+   interior, covering every corner and return. Tap **Finish Scan** (**Cancel**
+   discards).
+2. **Empty room.** The result sheet shows the detected kind (with an
+   "auto-detected" note in Auto mode) and the reconstructed closet — walls,
+   floor, and any door/window/opening. Flip the **Contents removed** toggle to
+   make the detected clutter appear/vanish — that's the "digitally remove the
+   contents" step, live. For a walk-in, the **floor plan** card shows the
+   footprint with numbered wall badges matching the per-wall length list; any
+   coverage problems appear as warnings. Tap **Export empty room (USDZ)**
+   (architecture-only) and open it in Quick Look.
 3. **Calibrate (do this first for accuracy).** On the **Ruler** tab, measure a
    known reference (e.g., a 24" machinist rule): Set A, Set B, then ⋯ →
    **Calibrate from this reading**, enter 24.000. A "calibrated +x.xx%" chip
@@ -90,11 +108,12 @@ ClosetScanner/
   ContentView.swift             Tab bar + shared components
   Support/Units.swift           Metric → feet/inches/sixteenths formatting
   Scan/
-    RoomScanScreen.swift        Live RoomPlan capture UI
-    RoomScanModel.swift         Capture-session lifecycle + delegate
-    RoomDimensions.swift        Width/Depth/Height from captured walls
+    RoomScanScreen.swift        Mode picker + live RoomPlan capture UI (start/finish/cancel)
+    RoomScanModel.swift         Capture-session lifecycle + delegate + auto-detect pose capture
+    ClosetMetrics.swift         Footprint polygon/area, wall segments, portals, warnings, auto-detect
+    FloorPlanView.swift         Top-down 2D plan with numbered walls + door/opening styling
     EmptyRoomSceneView.swift    Reconstruction + contents toggle + architecture-only builder
-    ScanResultScreen.swift      Dimensions + toggle + empty USDZ export
+    ScanResultScreen.swift      Mode-adaptive dimensions + floor plan + empty USDZ export
   Measure/
     RulerEngine.swift           LiDAR raycast + MAD outlier rejection + confidence
     ARRulerContainer.swift      ARView config (mesh + depth)
@@ -112,6 +131,12 @@ VALIDATION.md                   Accuracy test protocol + expected results
 - RoomPlan whole-room dimensions are a fast estimate (±a few cm) and the
   bounding-box width/depth can over-report slightly for a closet scanned at an
   angle — measure square-on, and use the **Ruler** for spans that must be exact.
+  For non-rectangular walk-ins, prefer the per-wall segment lengths and
+  footprint area over the bounding box.
+- Auto-detect is a heuristic (device-inside-footprint, then footprint size); the
+  Reach-in/Walk-in picker is the override.
+- Very tight walk-ins (< ~3 ft clearance) can be hard for RoomPlan to track —
+  move slowly and keep surfaces ~1 m away where possible.
 - Depth quality degrades on dark, glossy, or transparent surfaces and beyond
   ~3 m. Measure short spans at close range for best accuracy.
 - "Remove contents" is by *omission* (architecture rendered, objects hidden), not
