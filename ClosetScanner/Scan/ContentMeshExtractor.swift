@@ -57,9 +57,14 @@ enum ContentMeshExtractor {
     // couple cm of its fitted plane and get dropped; a bumpy garment surface
     // scatters well past `pointWallSkin`, so most of it survives even when
     // RoomPlan fit the "wall" to the front face of packed clothes.
-    private static let pointWallSkin: Float = 0.03       // 3 cm around vertical planes
+    // Skin is wide enough to strip the whole wall sheet (RoomPlan's plane can
+    // sit a few cm off the real surface, plus LiDAR noise) so residual wall
+    // points stop bridging every item into one shell blob. Hanging clothes and
+    // shelves protrude well past 6 cm, so their bulk survives and clusters on
+    // its own; only items pressed flat against the wall are at risk.
+    private static let pointWallSkin: Float = 0.06       // 6 cm around vertical planes
     private static let pointRectMargin: Float = 0.10     // tolerance past a plane's edges
-    private static let pointFloorStandoff: Float = 0.04  // keep points ≥4 cm above the floor (shoes)
+    private static let pointFloorStandoff: Float = 0.05  // keep points ≥5 cm above the floor (shoes)
     private static let pointCeilingClearance: Float = 0.05
     private static let pointContentReach: Float = 0.10   // keep points this far outside the wall bbox
 
