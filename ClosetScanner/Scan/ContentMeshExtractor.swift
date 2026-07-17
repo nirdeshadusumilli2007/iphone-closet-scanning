@@ -55,6 +55,15 @@ enum ContentMeshExtractor {
     private static let pointCeilingClearance: Float = 0.05
     private static let pointContentReach: Float = 0.10   // keep points this far outside the wall bbox
 
+    // Size gate. After protrusion filtering, group the surviving points into
+    // connected blobs and keep only ones large enough to be a real item
+    // (clothes, shoes, a comforter) — this drops stray noise specks and the
+    // thin wall/floor skin fragments that leak through. `minItemExtent` is the
+    // primary knob: raise it to keep only bigger things, lower it to keep more.
+    private static let clusterCell: Float = 0.04         // 4 cm — bridges LiDAR holes when grouping
+    private static let minItemExtent: Float = 0.22       // longest blob edge must reach ~22 cm
+    private static let minClusterCells: Int = 10         // and span at least this many cells
+
     // MARK: Snapshot
 
     /// Copies every `ARMeshAnchor` out of the session's current frame.
@@ -249,7 +258,64 @@ enum ContentMeshExtractor {
             if isWallSkin(p) { continue }
             out.append(p)
         }
-        return out
+        return keepLargeClusters(out)
+    }
+
+    /// Connected-component filter: bins points into `clusterCell` cells, grows
+    /// blobs through 26-neighbour adjacency (so small LiDAR holes don't split an
+    /// item), and returns only the points belonging to blobs that are both big
+    /// enough across (`minItemExtent`) and dense enough (`minClusterCells`).
+    private static func keepLargeClusters(_ points: [SIMD3<Float>]) -> [SIMD3<Float>] {
+        guard !points.isEmpty else { return [] }
+        let cell = clusterCell
+
+        func key(_ ix: Int, _ iy: Int, _ iz: Int) -> Int64 {
+            let m: Int64 = 0x1F_FFFF
+            return ((Int64(ix) & m) << 42) | ((Int64(iy) & m) << 21) | (Int64(iz) & m)
+        }
+
+        // Bucket point indices by cell, and remember each cell's grid coord.
+        var cellPoints: [Int64: [Int]] = [:]
+        var cellCoord: [Int64: SIMD3<Int>] = [:]
+        for (i, p) in points.enumerated() {
+            let ix = Int((p.x / cell).rounded(.down))
+            let iy = Int((p.y / cell).rounded(.down))
+            let iz = Int((p.z / cell).rounded(.down))
+            let k = key(ix, iy, iz)
+            cellPoints[k, default: []].append(i)
+            cellCoord[k] = SIMD3(ix, iy, iz)
+        }
+
+        var visited = Set<Int64>()
+        var kept: [SIMD3<Float>] = []
+        for start in cellPoints.keys where !visited.contains(start) {
+            var stack = [start]
+            visited.insert(start)
+            var blob: [Int64] = []
+            var lo = SIMD3<Int>(repeating: .max)
+            var hi = SIMD3<Int>(repeating: .min)
+
+            while let ck = stack.popLast() {
+                blob.append(ck)
+                let c = cellCoord[ck]!
+                lo = simd_min(lo, c)
+                hi = simd_max(hi, c)
+                for dz in -1...1 { for dy in -1...1 { for dx in -1...1 {
+                    if dx == 0 && dy == 0 && dz == 0 { continue }
+                    let nk = key(c.x + dx, c.y + dy, c.z + dz)
+                    if cellPoints[nk] != nil, !visited.contains(nk) {
+                        visited.insert(nk)
+                        stack.append(nk)
+                    }
+                }}}
+            }
+
+            let span = SIMD3<Float>(Float(hi.x - lo.x), Float(hi.y - lo.y), Float(hi.z - lo.z)) * cell + cell
+            let longestEdge = max(span.x, max(span.y, span.z))
+            guard longestEdge >= minItemExtent, blob.count >= minClusterCells else { continue }
+            for ck in blob { for i in cellPoints[ck]! { kept.append(points[i]) } }
+        }
+        return kept
     }
 
     /// Drops unreferenced vertices and remaps indices.
