@@ -26,7 +26,7 @@ struct ScanResultScreen: View {
                     header
 
                     EmptyRoomSceneView(room: result.room, contentMesh: result.contentMesh,
-                                       contentBoxes: result.contentBoxes,
+                                       contentPoints: result.contentPoints,
                                        showContents: showContents)
                         .frame(height: 300)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -37,7 +37,7 @@ struct ScanResultScreen: View {
                                 .padding(8)
                         }
 
-                    if result.contentMesh.isEmpty && result.contentBoxes.isEmpty && result.room.objects.isEmpty {
+                    if result.contentMesh.isEmpty && result.contentPoints.isEmpty && result.room.objects.isEmpty {
                         Label("No contents were detected in this scan. Pan slowly across shelves and hanging items so the LiDAR mesh can pick them up.",
                               systemImage: "shippingbox")
                             .font(.caption)

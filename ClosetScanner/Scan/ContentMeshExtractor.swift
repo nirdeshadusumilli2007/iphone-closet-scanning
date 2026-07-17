@@ -14,14 +14,6 @@ struct ContentMesh {
     let indices: [Int32]        // triangles, 3 indices per face
 }
 
-/// A single detected item as a world-axis-aligned bounding box — one box per
-/// connected blob of content points. A pile of hanging clothes collapses to one
-/// big box; each shoe is its own small box; a shelf reads as a flat box.
-struct ContentBox {
-    let center: SIMD3<Float>
-    let size: SIMD3<Float>      // full extents (width, height, depth)
-}
-
 /// Raw per-anchor mesh data copied out of the ARSession the moment Finish is
 /// tapped — RoomPlan tears the session down during post-processing, so the
 /// snapshot has to happen before `stop()`.
@@ -57,36 +49,11 @@ enum ContentMeshExtractor {
     // couple cm of its fitted plane and get dropped; a bumpy garment surface
     // scatters well past `pointWallSkin`, so most of it survives even when
     // RoomPlan fit the "wall" to the front face of packed clothes.
-    // Skin is wide enough to strip the whole wall sheet (RoomPlan's plane can
-    // sit a few cm off the real surface, plus LiDAR noise) so residual wall
-    // points stop bridging every item into one shell blob. Hanging clothes and
-    // shelves protrude well past 6 cm, so their bulk survives and clusters on
-    // its own; only items pressed flat against the wall are at risk.
-    private static let pointWallSkin: Float = 0.06       // 6 cm around vertical planes
-    // Doors and openings lead out of the closet; LiDAR sees through them and
-    // captures the threshold and the room beyond as a blob at the doorway. Cull
-    // a thick slab across the opening (both sides) so none of it reads as an
-    // item — deeper than the wall skin because the leak extends into the gap.
-    private static let pointDoorClearance: Float = 0.20  // ±20 cm around door/opening planes
+    private static let pointWallSkin: Float = 0.03       // 3 cm around vertical planes
     private static let pointRectMargin: Float = 0.10     // tolerance past a plane's edges
-    private static let pointFloorStandoff: Float = 0.05  // keep points ≥5 cm above the floor (shoes)
+    private static let pointFloorStandoff: Float = 0.04  // keep points ≥4 cm above the floor (shoes)
     private static let pointCeilingClearance: Float = 0.05
     private static let pointContentReach: Float = 0.10   // keep points this far outside the wall bbox
-
-    // Size gate. After protrusion filtering, group the surviving points into
-    // connected blobs and keep only ones large enough to be a real item
-    // (clothes, shoes, a comforter) — this drops stray noise specks and the
-    // thin wall/floor skin fragments that leak through. `minItemExtent` is the
-    // primary knob: raise it to keep only bigger things, lower it to keep more.
-    private static let clusterCell: Float = 0.04         // 4 cm — bridges LiDAR holes when grouping
-    private static let minItemExtent: Float = 0.22       // longest blob edge must reach ~22 cm
-    private static let minClusterCells: Int = 10         // and span at least this many cells
-    private static let boxMinThickness: Float = 0.04     // floor each box dimension so thin scans stay visible
-    private static let boxPadding: Float = 0.01          // small inflation so boxes fully wrap their points
-    // Residual wall/floor skin forms one blob spanning the whole closet; a real
-    // item never covers most of the floor plan. Drop any blob that spans more
-    // than this fraction of the room in BOTH floor axes at once.
-    private static let maxItemFloorFraction: Float = 0.7
 
     // MARK: Snapshot
 
@@ -231,25 +198,19 @@ enum ContentMeshExtractor {
     /// classification (a dense depth cloud has none) and never clips to the
     /// footprint polygon, so shoes the mesh merged into the floor and clothes
     /// RoomPlan buried in the back wall both survive.
-    static func extractContentBoxes(points: [SIMD3<Float>],
-                                    room: CapturedRoom,
-                                    metrics: ClosetMetrics?) -> [ContentBox] {
+    static func extractContentPoints(points: [SIMD3<Float>],
+                                     room: CapturedRoom,
+                                     metrics: ClosetMetrics?) -> [SIMD3<Float>] {
         guard !room.walls.isEmpty, !points.isEmpty else { return [] }
 
         // Vertical architecture only — floor/ceiling are handled by the height
         // band below, so a low object resting on the floor is never mistaken
-        // for the floor plane itself. Doors/openings get a thicker clearance
-        // than solid walls to cull the leak through the gap.
-        struct Plane { let inv: simd_float4x4; let hx: Float; let hy: Float; let clearance: Float }
-        let planes =
-            (room.walls + room.windows).map {
-                Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2,
-                      clearance: pointWallSkin)
-            } +
-            (room.doors + room.openings).map {
-                Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2,
-                      clearance: pointDoorClearance)
-            }
+        // for the floor plane itself.
+        struct Plane { let inv: simd_float4x4; let hx: Float; let hy: Float }
+        let verticalSurfaces = room.walls + room.doors + room.windows + room.openings
+        let planes = verticalSurfaces.map {
+            Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2)
+        }
 
         var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
@@ -264,10 +225,10 @@ enum ContentMeshExtractor {
             }
         }
 
-        func isExcluded(_ p: SIMD3<Float>) -> Bool {
+        func isWallSkin(_ p: SIMD3<Float>) -> Bool {
             for plane in planes {
                 let local = plane.inv * SIMD4<Float>(p, 1)
-                if abs(local.z) < plane.clearance,
+                if abs(local.z) < pointWallSkin,
                    abs(local.x) < plane.hx + pointRectMargin,
                    abs(local.y) < plane.hy + pointRectMargin {
                     return true
@@ -285,76 +246,10 @@ enum ContentMeshExtractor {
             // wall RoomPlan fit to their front face are still kept.
             guard p.x > lo.x - pointContentReach, p.x < hi.x + pointContentReach,
                   p.z > lo.z - pointContentReach, p.z < hi.z + pointContentReach else { continue }
-            if isExcluded(p) { continue }
+            if isWallSkin(p) { continue }
             out.append(p)
         }
-        return clusterBoxes(out, roomExtent: hi - lo)
-    }
-
-    /// Connected-component clustering: bins points into `clusterCell` cells,
-    /// grows blobs through 26-neighbour adjacency (so small LiDAR holes don't
-    /// split an item), and returns one bounding box per blob that is both big
-    /// enough across (`minItemExtent`) and dense enough (`minClusterCells`).
-    /// Each box is fit to the blob's actual points, not the coarse cell grid.
-    private static func clusterBoxes(_ points: [SIMD3<Float>],
-                                     roomExtent: SIMD3<Float>) -> [ContentBox] {
-        guard !points.isEmpty else { return [] }
-        let cell = clusterCell
-
-        func key(_ ix: Int, _ iy: Int, _ iz: Int) -> Int64 {
-            let m: Int64 = 0x1F_FFFF
-            return ((Int64(ix) & m) << 42) | ((Int64(iy) & m) << 21) | (Int64(iz) & m)
-        }
-
-        // Bucket point indices by cell, and remember each cell's grid coord.
-        var cellPoints: [Int64: [Int]] = [:]
-        var cellCoord: [Int64: SIMD3<Int>] = [:]
-        for (i, p) in points.enumerated() {
-            let ix = Int((p.x / cell).rounded(.down))
-            let iy = Int((p.y / cell).rounded(.down))
-            let iz = Int((p.z / cell).rounded(.down))
-            let k = key(ix, iy, iz)
-            cellPoints[k, default: []].append(i)
-            cellCoord[k] = SIMD3(ix, iy, iz)
-        }
-
-        var visited = Set<Int64>()
-        var boxes: [ContentBox] = []
-        for start in cellPoints.keys where !visited.contains(start) {
-            var stack = [start]
-            visited.insert(start)
-            var cellCount = 0
-            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
-            var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-
-            while let ck = stack.popLast() {
-                cellCount += 1
-                for i in cellPoints[ck]! {          // tighten the box to real points
-                    lo = simd_min(lo, points[i])
-                    hi = simd_max(hi, points[i])
-                }
-                let c = cellCoord[ck]!
-                for dz in -1...1 { for dy in -1...1 { for dx in -1...1 {
-                    if dx == 0 && dy == 0 && dz == 0 { continue }
-                    let nk = key(c.x + dx, c.y + dy, c.z + dz)
-                    if cellPoints[nk] != nil, !visited.contains(nk) {
-                        visited.insert(nk)
-                        stack.append(nk)
-                    }
-                }}}
-            }
-
-            let extent = hi - lo
-            guard max(extent.x, max(extent.y, extent.z)) >= minItemExtent,
-                  cellCount >= minClusterCells else { continue }
-            // Reject the room-spanning wall/floor shell: a real item never
-            // covers most of the floor plan in both horizontal axes at once.
-            if extent.x > maxItemFloorFraction * roomExtent.x,
-               extent.z > maxItemFloorFraction * roomExtent.z { continue }
-            let size = simd_max(extent, SIMD3(repeating: boxMinThickness)) + SIMD3(repeating: boxPadding)
-            boxes.append(ContentBox(center: (lo + hi) / 2, size: size))
-        }
-        return boxes
+        return out
     }
 
     /// Drops unreferenced vertices and remaps indices.
