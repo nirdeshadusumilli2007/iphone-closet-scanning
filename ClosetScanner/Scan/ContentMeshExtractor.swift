@@ -73,6 +73,10 @@ enum ContentMeshExtractor {
     private static let minClusterCells: Int = 10         // and span at least this many cells
     private static let boxMinThickness: Float = 0.04     // floor each box dimension so thin scans stay visible
     private static let boxPadding: Float = 0.01          // small inflation so boxes fully wrap their points
+    // Residual wall/floor skin forms one blob spanning the whole closet; a real
+    // item never covers most of the floor plan. Drop any blob that spans more
+    // than this fraction of the room in BOTH floor axes at once.
+    private static let maxItemFloorFraction: Float = 0.7
 
     // MARK: Snapshot
 
@@ -268,7 +272,7 @@ enum ContentMeshExtractor {
             if isWallSkin(p) { continue }
             out.append(p)
         }
-        return clusterBoxes(out)
+        return clusterBoxes(out, roomExtent: hi - lo)
     }
 
     /// Connected-component clustering: bins points into `clusterCell` cells,
@@ -276,7 +280,8 @@ enum ContentMeshExtractor {
     /// split an item), and returns one bounding box per blob that is both big
     /// enough across (`minItemExtent`) and dense enough (`minClusterCells`).
     /// Each box is fit to the blob's actual points, not the coarse cell grid.
-    private static func clusterBoxes(_ points: [SIMD3<Float>]) -> [ContentBox] {
+    private static func clusterBoxes(_ points: [SIMD3<Float>],
+                                     roomExtent: SIMD3<Float>) -> [ContentBox] {
         guard !points.isEmpty else { return [] }
         let cell = clusterCell
 
@@ -326,6 +331,10 @@ enum ContentMeshExtractor {
             let extent = hi - lo
             guard max(extent.x, max(extent.y, extent.z)) >= minItemExtent,
                   cellCount >= minClusterCells else { continue }
+            // Reject the room-spanning wall/floor shell: a real item never
+            // covers most of the floor plan in both horizontal axes at once.
+            if extent.x > maxItemFloorFraction * roomExtent.x,
+               extent.z > maxItemFloorFraction * roomExtent.z { continue }
             let size = simd_max(extent, SIMD3(repeating: boxMinThickness)) + SIMD3(repeating: boxPadding)
             boxes.append(ContentBox(center: (lo + hi) / 2, size: size))
         }
