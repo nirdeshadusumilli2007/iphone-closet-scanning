@@ -96,6 +96,19 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         depthTimer = nil
     }
 
+    /// Fully release the camera when leaving the Scan tab so the Ruler can take
+    /// it. `RoomCaptureView` holds the AR session for its live preview until the
+    /// session is stopped, so stop it even when no scan is running — otherwise
+    /// the Ruler tab comes up black.
+    func releaseCamera() {
+        if isScanning {
+            cancel()
+        } else {
+            stopDepthSampling()
+            captureView?.captureSession.stop()
+        }
+    }
+
     /// Aborts the scan and discards the result (Cancel button, or the tab
     /// disappearing). RoomPlan still runs its post-processing after `stop()`,
     /// so we flag the result to be thrown away when the delegate fires.

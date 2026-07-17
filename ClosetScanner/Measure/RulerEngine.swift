@@ -32,6 +32,11 @@ final class RulerEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     weak var arView: ARView?
 
+    /// The Ruler tab wants the camera. Cleared on pause so pending retries stop.
+    private var isSessionActive = false
+    /// Set once ARKit starts delivering frames, i.e. we actually hold the camera.
+    private var hasReceivedFrame = false
+
     private var sampleBuffer: [SIMD3<Float>] = []
     private let bufferCapacity = 60          // ~1 s at 60 fps
     private let commitWindow = 30            // samples averaged on commit
@@ -55,6 +60,7 @@ final class RulerEngine: NSObject, ObservableObject, ARSessionDelegate {
     /// Pause when the tab disappears so this session doesn't fight the Scan
     /// tab's RoomPlan session for the camera.
     func pauseSession() {
+        isSessionActive = false
         arView?.session.pause()
         sampleBuffer.removeAll()
         hasLiveHit = false
@@ -67,8 +73,26 @@ final class RulerEngine: NSObject, ObservableObject, ARSessionDelegate {
         // surface it instead so the user knows to fix it in Settings.
         let auth = AVCaptureDevice.authorizationStatus(for: .video)
         cameraDenied = (auth == .denied || auth == .restricted)
-        guard !cameraDenied, let arView else { return }
+        guard !cameraDenied, arView != nil else { return }
+        // Reclaiming the camera from the Scan tab is racy: SwiftUI fires this
+        // tab's onAppear *before* the Scan tab's onDisappear releases the camera,
+        // and ARKit won't auto-recover once another session has grabbed it. So
+        // re-run the config until frames actually start flowing.
+        isSessionActive = true
+        hasReceivedFrame = false
+        runSessionWithRetry(attempt: 0)
+    }
+
+    /// Runs the session, then re-runs every 0.4 s until a frame arrives (the
+    /// camera became free) or the attempts run out. Retries stop immediately
+    /// once `hasReceivedFrame` flips or the tab is paused.
+    private func runSessionWithRetry(attempt: Int) {
+        guard isSessionActive, !hasReceivedFrame, let arView else { return }
         arView.session.run(Self.makeConfiguration())
+        guard attempt < 8 else { return }        // ~3 s of retries, then give up
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.runSessionWithRetry(attempt: attempt + 1)
+        }
     }
 
     // MARK: ARSessionDelegate
@@ -112,6 +136,9 @@ final class RulerEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard let arView else { return }
+
+        // First frame means we hold the camera — stop the reclaim retries.
+        if !hasReceivedFrame { DispatchQueue.main.async { self.hasReceivedFrame = true } }
 
         // Use the view's own-bounds center (UIView.center is in *superview* space).
         let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)

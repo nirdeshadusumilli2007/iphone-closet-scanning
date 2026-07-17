@@ -36,7 +36,7 @@ struct RoomScanScreen: View {
         }
         .navigationTitle("Closet Scan")
         .navigationBarTitleDisplayMode(.inline)
-        .onDisappear { model.cancel() }   // release the camera for the Ruler tab
+        .onDisappear { model.releaseCamera() }   // release the camera for the Ruler tab
         .sheet(item: $model.result) { result in
             ScanResultScreen(result: result)
         }
