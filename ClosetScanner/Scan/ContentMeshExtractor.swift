@@ -63,6 +63,11 @@ enum ContentMeshExtractor {
     // shelves protrude well past 6 cm, so their bulk survives and clusters on
     // its own; only items pressed flat against the wall are at risk.
     private static let pointWallSkin: Float = 0.06       // 6 cm around vertical planes
+    // Doors and openings lead out of the closet; LiDAR sees through them and
+    // captures the threshold and the room beyond as a blob at the doorway. Cull
+    // a thick slab across the opening (both sides) so none of it reads as an
+    // item — deeper than the wall skin because the leak extends into the gap.
+    private static let pointDoorClearance: Float = 0.20  // ±20 cm around door/opening planes
     private static let pointRectMargin: Float = 0.10     // tolerance past a plane's edges
     private static let pointFloorStandoff: Float = 0.05  // keep points ≥5 cm above the floor (shoes)
     private static let pointCeilingClearance: Float = 0.05
@@ -233,12 +238,18 @@ enum ContentMeshExtractor {
 
         // Vertical architecture only — floor/ceiling are handled by the height
         // band below, so a low object resting on the floor is never mistaken
-        // for the floor plane itself.
-        struct Plane { let inv: simd_float4x4; let hx: Float; let hy: Float }
-        let verticalSurfaces = room.walls + room.doors + room.windows + room.openings
-        let planes = verticalSurfaces.map {
-            Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2)
-        }
+        // for the floor plane itself. Doors/openings get a thicker clearance
+        // than solid walls to cull the leak through the gap.
+        struct Plane { let inv: simd_float4x4; let hx: Float; let hy: Float; let clearance: Float }
+        let planes =
+            (room.walls + room.windows).map {
+                Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2,
+                      clearance: pointWallSkin)
+            } +
+            (room.doors + room.openings).map {
+                Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2,
+                      clearance: pointDoorClearance)
+            }
 
         var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
@@ -253,10 +264,10 @@ enum ContentMeshExtractor {
             }
         }
 
-        func isWallSkin(_ p: SIMD3<Float>) -> Bool {
+        func isExcluded(_ p: SIMD3<Float>) -> Bool {
             for plane in planes {
                 let local = plane.inv * SIMD4<Float>(p, 1)
-                if abs(local.z) < pointWallSkin,
+                if abs(local.z) < plane.clearance,
                    abs(local.x) < plane.hx + pointRectMargin,
                    abs(local.y) < plane.hy + pointRectMargin {
                     return true
@@ -274,7 +285,7 @@ enum ContentMeshExtractor {
             // wall RoomPlan fit to their front face are still kept.
             guard p.x > lo.x - pointContentReach, p.x < hi.x + pointContentReach,
                   p.z > lo.z - pointContentReach, p.z < hi.z + pointContentReach else { continue }
-            if isWallSkin(p) { continue }
+            if isExcluded(p) { continue }
             out.append(p)
         }
         return clusterBoxes(out, roomExtent: hi - lo)
