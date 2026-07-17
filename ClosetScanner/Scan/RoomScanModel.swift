@@ -84,7 +84,9 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         deviceXZAtFinish = (captureView?.captureSession.arSession.currentFrame?.camera.transform.columns.3)
             .map { SIMD2<Float>($0.x, $0.z) }
         // Grab the accumulated scene mesh now — stop() tears the session down.
+        print("[ClosetScanner] finish: snapshotting scene mesh…")
         meshSnapshot = (captureView?.captureSession.arSession).map(ContentMeshExtractor.snapshot(from:))
+        print("[ClosetScanner] finish: snapshot ok — \(meshSnapshot?.anchors.count ?? 0) anchors, \(meshSnapshot?.anchors.reduce(0) { $0 + $1.vertices.count } ?? 0) vertices")
         captureView?.captureSession.stop()
         isScanning = false
         isProcessing = true
@@ -112,9 +114,11 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         statusText = ""
         let metrics = ClosetMetrics(from: processedResult)
         let kind = ClosetMetrics.resolveKind(mode: mode, metrics: metrics, deviceXZ: deviceXZAtFinish)
+        print("[ClosetScanner] didPresent: filtering contents…")
         let contents = meshSnapshot.map {
             ContentMeshExtractor.extractContents(from: $0, room: processedResult, metrics: metrics)
         } ?? []
+        print("[ClosetScanner] didPresent: filter ok — \(contents.count) content chunks, \(contents.reduce(0) { $0 + $1.indices.count / 3 }) triangles")
         meshSnapshot = nil
         result = ScanResult(room: processedResult, metrics: metrics, kind: kind,
                             requestedMode: mode, contentMesh: contents)
