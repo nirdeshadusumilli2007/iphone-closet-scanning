@@ -8,9 +8,13 @@ struct PrecisionRulerScreen: View {
     @StateObject private var engine = RulerEngine()
     @EnvironmentObject private var validation: ValidationStore
     @EnvironmentObject private var calibration: CalibrationStore
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var showLogSheet = false
     @State private var showCalibrateSheet = false
+    /// Whether this tab is the one on screen — scenePhase changes fire on every
+    /// live tab, and a hidden Ruler must not grab the camera from the Scan tab.
+    @State private var isVisible = false
 
     /// Raw committed distance corrected by the current scale factor.
     private var correctedFinalMeters: Double? {
@@ -30,21 +34,36 @@ struct PrecisionRulerScreen: View {
         }
         .navigationTitle("Precision Ruler")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { engine.resumeSession() }    // reclaim the camera on tab switch
-        .onDisappear { engine.pauseSession() }  // hand it back to the Scan tab
+        .onAppear {                             // reclaim the camera on tab switch
+            isVisible = true
+            engine.resumeSession()
+        }
+        .onDisappear {                          // hand it back to the Scan tab
+            isVisible = false
+            engine.pauseSession()
+        }
+        // Re-check permission + restart when returning from Settings/background
+        // — `onAppear` doesn't refire on foregrounding.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, isVisible { engine.resumeSession() }
+        }
     }
 
     private var content: some View {
         ZStack {
             ARRulerContainer(engine: engine).ignoresSafeArea()
-            crosshair
-            VStack {
-                topBar
-                Spacer()
-                readout
-                buttons
+            if engine.cameraDenied {
+                cameraDeniedOverlay
+            } else {
+                crosshair
+                VStack {
+                    topBar
+                    Spacer()
+                    readout
+                    buttons
+                }
+                .padding()
             }
-            .padding()
         }
         .sheet(isPresented: $showLogSheet) {
             if let meters = correctedFinalMeters {
@@ -62,6 +81,31 @@ struct PrecisionRulerScreen: View {
                 .presentationDetents([.medium])
             }
         }
+    }
+
+    /// ARKit renders a black screen when camera access is denied — explain and
+    /// route the user to Settings instead of leaving them staring at it.
+    private var cameraDeniedOverlay: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "video.slash.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.orange)
+            Text("Camera access is off")
+                .font(.title3.bold())
+            Text("The Precision Ruler needs the camera and LiDAR. Turn on Camera access for ClosetScanner in Settings, then come back to this tab.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
     }
 
     private var crosshair: some View {

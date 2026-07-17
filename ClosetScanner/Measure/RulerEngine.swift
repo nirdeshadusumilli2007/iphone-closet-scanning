@@ -1,6 +1,7 @@
 import SwiftUI
 import RealityKit
 import ARKit
+import AVFoundation
 import simd
 
 /// High-precision point-to-point measurement using ARKit + LiDAR.
@@ -25,6 +26,9 @@ final class RulerEngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published var liveSpreadMM: Double?           // current live stability of the crosshair
     @Published var trackingOK = false
     @Published var statusText = "Aim the crosshair at the first point, then tap Set A."
+    /// Camera access was denied/restricted — the AR view can only render black
+    /// until the user re-enables it in Settings.
+    @Published var cameraDenied = false
 
     weak var arView: ARView?
 
@@ -59,11 +63,52 @@ final class RulerEngine: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func resumeSession() {
-        guard let arView else { return }
+        // ARKit fails silently (black screen) when camera access is denied —
+        // surface it instead so the user knows to fix it in Settings.
+        let auth = AVCaptureDevice.authorizationStatus(for: .video)
+        cameraDenied = (auth == .denied || auth == .restricted)
+        guard !cameraDenied, let arView else { return }
         arView.session.run(Self.makeConfiguration())
     }
 
     // MARK: ARSessionDelegate
+
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        let isUnauthorized = (error as? ARError)?.code == .cameraUnauthorized
+        DispatchQueue.main.async {
+            if isUnauthorized {
+                self.cameraDenied = true
+            } else {
+                self.statusText = "AR session failed: \(error.localizedDescription)"
+            }
+        }
+        // Non-permission failures (sensor hiccup, etc.) are usually transient —
+        // restart from scratch so the feed comes back.
+        guard !isUnauthorized else { return }
+        sampleBuffer.removeAll()
+        session.run(Self.makeConfiguration(), options: [.resetTracking, .removeExistingAnchors])
+        DispatchQueue.main.async { self.reset() }
+    }
+
+    /// Another session (the Scan tab's RoomPlan capture) or the system took the
+    /// camera. On tab switches the Ruler's `onAppear` fires *before* the Scan
+    /// tab's `onDisappear`, so our session can start interrupted; re-run once
+    /// the camera is released or the feed stays black.
+    func sessionWasInterrupted(_ session: ARSession) {
+        sampleBuffer.removeAll()
+        DispatchQueue.main.async {
+            self.hasLiveHit = false
+            self.trackingOK = false
+        }
+    }
+
+    func sessionInterruptionEnded(_ session: ARSession) {
+        sampleBuffer.removeAll()
+        session.run(Self.makeConfiguration(), options: [.resetTracking, .removeExistingAnchors])
+        // Tracking was reset — world coordinates from before the interruption
+        // (points A/B, markers) no longer mean anything.
+        DispatchQueue.main.async { self.reset() }
+    }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard let arView else { return }
