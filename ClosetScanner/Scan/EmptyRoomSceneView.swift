@@ -9,7 +9,8 @@ import simd
 /// for a clean export.
 enum RoomSceneBuilder {
 
-    static func scene(from room: CapturedRoom, includeContents: Bool) -> SCNScene {
+    static func scene(from room: CapturedRoom, includeContents: Bool,
+                      contentMesh: [ContentMesh] = []) -> SCNScene {
         let scene = SCNScene()
         var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
@@ -58,8 +59,14 @@ enum RoomSceneBuilder {
             scene.rootNode.addChildNode(floorNode)
         }
 
-        // Contents — translucent orange boxes, tagged so the UI can toggle them.
+        // Contents — tagged "content" so the UI can toggle them. Two sources:
+        // the raw LiDAR mesh of everything that isn't architecture (catches
+        // clothes, bins, shelf clutter), plus RoomPlan's classified objects
+        // as translucent orange boxes.
         if includeContents {
+            for mesh in contentMesh {
+                scene.rootNode.addChildNode(contentMeshNode(mesh))
+            }
             for object in room.objects {
                 let box = SCNBox(width: CGFloat(object.dimensions.x),
                                  height: CGFloat(object.dimensions.y),
@@ -138,6 +145,32 @@ enum RoomSceneBuilder {
         m.isDoubleSided = true
         return m
     }
+
+    /// The filtered LiDAR mesh of the closet's contents, with smoothed normals
+    /// accumulated from face normals so default lighting shades it.
+    private static func contentMeshNode(_ mesh: ContentMesh) -> SCNNode {
+        var normals = [SIMD3<Float>](repeating: .zero, count: mesh.vertices.count)
+        for f in stride(from: 0, to: mesh.indices.count, by: 3) {
+            let ia = Int(mesh.indices[f]), ib = Int(mesh.indices[f + 1]), ic = Int(mesh.indices[f + 2])
+            let n = simd_cross(mesh.vertices[ib] - mesh.vertices[ia],
+                               mesh.vertices[ic] - mesh.vertices[ia])   // area-weighted
+            normals[ia] += n; normals[ib] += n; normals[ic] += n
+        }
+
+        let vertexSource = SCNGeometrySource(vertices: mesh.vertices.map { SCNVector3($0.x, $0.y, $0.z) })
+        let normalSource = SCNGeometrySource(normals: normals.map { n -> SCNVector3 in
+            let len = simd_length(n)
+            let u = len > 0 ? n / len : SIMD3<Float>(0, 1, 0)
+            return SCNVector3(u.x, u.y, u.z)
+        })
+        let element = SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)
+        let geometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
+        geometry.materials = [contentMaterial()]
+
+        let node = SCNNode(geometry: geometry)
+        node.name = "content"
+        return node
+    }
 }
 
 /// Orbitable 3D view of the reconstructed closet. Toggling `showContents` hides
@@ -145,6 +178,7 @@ enum RoomSceneBuilder {
 /// space is visible on demand.
 struct EmptyRoomSceneView: UIViewRepresentable {
     let room: CapturedRoom
+    let contentMesh: [ContentMesh]
     let showContents: Bool
 
     func makeUIView(context: Context) -> SCNView {
@@ -153,7 +187,7 @@ struct EmptyRoomSceneView: UIViewRepresentable {
         view.autoenablesDefaultLighting = true
         view.backgroundColor = .black
         view.antialiasingMode = .multisampling4X
-        view.scene = RoomSceneBuilder.scene(from: room, includeContents: true)
+        view.scene = RoomSceneBuilder.scene(from: room, includeContents: true, contentMesh: contentMesh)
         return view
     }
 

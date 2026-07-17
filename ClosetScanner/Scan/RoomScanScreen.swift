@@ -4,9 +4,11 @@ import ARKit
 
 /// Live RoomPlan capture. RoomPlan uses the camera + LiDAR to reconstruct the
 /// room's *architecture* (walls, floor, ceiling, doors, windows) separately from
-/// its *contents* (`objects`). Because we render only the architecture, the
-/// closet's clutter is inherently excluded — that is our "digitally remove the
-/// existing contents" step.
+/// its *contents*. Contents come from two sources: RoomPlan's classified
+/// `objects`, plus the raw LiDAR scene mesh filtered against the architecture
+/// (see `ContentMeshExtractor`) — which catches clothes, bins, and clutter that
+/// RoomPlan can't classify. Rendering only the architecture is our "digitally
+/// remove the existing contents" step.
 ///
 /// Flow: pick a closet type (Reach-in / Walk-in / Auto) → Start Scan → coached
 /// capture → Finish (process) or Cancel (discard).

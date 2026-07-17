@@ -10,6 +10,9 @@ struct ScanResult: Identifiable {
     let metrics: ClosetMetrics?
     let kind: ResolvedClosetKind
     let requestedMode: ClosetMode
+    /// LiDAR scene mesh of everything inside the closet that isn't
+    /// architecture — the contents the show/hide toggle operates on.
+    let contentMesh: [ContentMesh]
 }
 
 /// Owns the RoomPlan capture session lifecycle and surfaces results to SwiftUI.
@@ -27,6 +30,9 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
     /// Device position (world XZ) at the moment Finish was tapped — the
     /// inside-the-footprint signal for auto-detection.
     private var deviceXZAtFinish: SIMD2<Float>?
+    /// LiDAR scene mesh copied out at Finish time, before RoomPlan stops the
+    /// session. Filtered against the processed room in the delegate callback.
+    private var meshSnapshot: MeshSnapshot?
 
     /// RoomPlan is only available on LiDAR-equipped devices; scene-mesh support is a reliable proxy.
     static var isSupported: Bool {
@@ -54,6 +60,7 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         guard let captureView, !isScanning, !isProcessing else { return }
         pendingCancel = false
         deviceXZAtFinish = nil
+        meshSnapshot = nil
         statusText = mode.coaching
         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
         isScanning = true
@@ -76,6 +83,8 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         guard isScanning else { return }
         deviceXZAtFinish = (captureView?.captureSession.arSession.currentFrame?.camera.transform.columns.3)
             .map { SIMD2<Float>($0.x, $0.z) }
+        // Grab the accumulated scene mesh now — stop() tears the session down.
+        meshSnapshot = (captureView?.captureSession.arSession).map(ContentMeshExtractor.snapshot(from:))
         captureView?.captureSession.stop()
         isScanning = false
         isProcessing = true
@@ -92,6 +101,7 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         isProcessing = false
         if pendingCancel {
             pendingCancel = false
+            meshSnapshot = nil
             statusText = ""
             return
         }
@@ -102,6 +112,11 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         statusText = ""
         let metrics = ClosetMetrics(from: processedResult)
         let kind = ClosetMetrics.resolveKind(mode: mode, metrics: metrics, deviceXZ: deviceXZAtFinish)
-        result = ScanResult(room: processedResult, metrics: metrics, kind: kind, requestedMode: mode)
+        let contents = meshSnapshot.map {
+            ContentMeshExtractor.extractContents(from: $0, room: processedResult, metrics: metrics)
+        } ?? []
+        meshSnapshot = nil
+        result = ScanResult(room: processedResult, metrics: metrics, kind: kind,
+                            requestedMode: mode, contentMesh: contents)
     }
 }

@@ -25,7 +25,8 @@ struct ScanResultScreen: View {
                 VStack(spacing: 20) {
                     header
 
-                    EmptyRoomSceneView(room: result.room, showContents: showContents)
+                    EmptyRoomSceneView(room: result.room, contentMesh: result.contentMesh,
+                                       showContents: showContents)
                         .frame(height: 300)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                         .overlay(alignment: .bottomLeading) {
@@ -35,11 +36,19 @@ struct ScanResultScreen: View {
                                 .padding(8)
                         }
 
-                    Toggle(isOn: $showContents) {
-                        Label(showContents ? "Showing existing contents" : "Contents removed (empty space)",
-                              systemImage: showContents ? "shippingbox.fill" : "shippingbox")
+                    if result.contentMesh.isEmpty && result.room.objects.isEmpty {
+                        Label("No contents were detected in this scan. Pan slowly across shelves and hanging items so the LiDAR mesh can pick them up.",
+                              systemImage: "shippingbox")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Toggle(isOn: $showContents) {
+                            Label(showContents ? "Showing existing contents" : "Contents removed (empty space)",
+                                  systemImage: showContents ? "shippingbox.fill" : "shippingbox")
+                        }
+                        .tint(.orange)
                     }
-                    .tint(.orange)
 
                     if let m = result.metrics {
                         if !warnings(for: m).isEmpty {
@@ -272,7 +281,8 @@ struct ScanResultScreen: View {
         exportError = nil
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("EmptyCloset.usdz")
         try? FileManager.default.removeItem(at: url)
-        let scene = RoomSceneBuilder.scene(from: result.room, includeContents: false)
+        let scene = RoomSceneBuilder.scene(from: result.room, includeContents: false,
+                                           contentMesh: result.contentMesh)
         if scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) {
             exportURL = url
             showShare = true
