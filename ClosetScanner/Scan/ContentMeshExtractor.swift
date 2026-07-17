@@ -32,14 +32,15 @@ enum ContentMeshExtractor {
     // within `wallClearance` of a captured wall/door/window/opening/floor
     // surface, or hugs the floor/ceiling, or falls outside the footprint.
     //
-    // High-sensitivity preset: tighter clearances keep more real contents —
-    // flat shoes on the floor and items pressed close to the walls — at the cost
-    // of occasionally leaving a little wall/floor mesh noise. Going below ~2 cm
-    // is where the wall/floor skin starts leaking in as fake contents.
-    private static let wallClearance: Float = 0.03     // 3 cm — keeps wall-hugging clothes/shelves
-    private static let floorClearance: Float = 0.02    // 2 cm — keeps flat shoes
-    private static let ceilingClearance: Float = 0.05
-    private static let bboxInset: Float = 0.02         // fallback clip when no closed footprint exists
+    // Maximum-sensitivity preset: clearances pushed to (and past) the noise
+    // floor so essentially everything that isn't the architecture itself is
+    // kept — wall-hugging clothes, flat shoes, thin shelf items. Expect some
+    // wall/floor mesh skin to survive as fake contents; the LiDAR skin sits
+    // ~1–2 cm off the true surface, so this trades noise for recall.
+    private static let wallClearance: Float = 0.02     // 2 cm — the leak threshold
+    private static let floorClearance: Float = 0.01    // 1 cm — keeps the flattest items
+    private static let ceilingClearance: Float = 0.03
+    private static let bboxInset: Float = 0.01         // fallback clip when no closed footprint exists
 
     // MARK: Snapshot
 
