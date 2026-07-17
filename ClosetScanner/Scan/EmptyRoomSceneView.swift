@@ -11,7 +11,7 @@ enum RoomSceneBuilder {
 
     static func scene(from room: CapturedRoom, includeContents: Bool,
                       contentMesh: [ContentMesh] = [],
-                      contentPoints: [SIMD3<Float>] = []) -> SCNScene {
+                      contentBoxes: [ContentBox] = []) -> SCNScene {
         let scene = SCNScene()
         var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
@@ -65,11 +65,17 @@ enum RoomSceneBuilder {
         // clothes, bins, shelf clutter), plus RoomPlan's classified objects
         // as translucent orange boxes.
         if includeContents {
-            for mesh in contentMesh {
-                scene.rootNode.addChildNode(contentMeshNode(mesh))
-            }
-            if !contentPoints.isEmpty {
-                scene.rootNode.addChildNode(contentPointsNode(contentPoints))
+            // Depth-derived item boxes are the primary content view; fall back
+            // to the raw filtered mesh only when the depth cloud came back empty
+            // (e.g. RoomPlan didn't vend sceneDepth on this device).
+            if !contentBoxes.isEmpty {
+                for box in contentBoxes {
+                    scene.rootNode.addChildNode(contentBoxNode(box))
+                }
+            } else {
+                for mesh in contentMesh {
+                    scene.rootNode.addChildNode(contentMeshNode(mesh))
+                }
             }
             for object in room.objects {
                 let box = SCNBox(width: CGFloat(object.dimensions.x),
@@ -176,23 +182,16 @@ enum RoomSceneBuilder {
         return node
     }
 
-    /// The dense depth point cloud of the contents, drawn as a SceneKit point
-    /// primitive. Tagged "content" so it toggles with the mesh; excluded from
-    /// the empty-room USDZ export (which is built with `includeContents: false`).
-    private static func contentPointsNode(_ points: [SIMD3<Float>]) -> SCNNode {
-        let source = SCNGeometrySource(vertices: points.map { SCNVector3($0.x, $0.y, $0.z) })
-        let element = SCNGeometryElement(indices: Array(0..<Int32(points.count)), primitiveType: .point)
-        element.pointSize = 0.012
-        element.minimumPointScreenSpaceRadius = 2
-        element.maximumPointScreenSpaceRadius = 6
-        let geometry = SCNGeometry(sources: [source], elements: [element])
-
-        let material = SCNMaterial()
-        material.diffuse.contents = UIColor.systemOrange
-        material.lightingModel = .constant            // points carry no normals
-        geometry.materials = [material]
-
+    /// One detected item as a translucent box at its world-space bounding box.
+    /// Tagged "content" so it toggles with the rest; excluded from the empty-room
+    /// USDZ export (which is built with `includeContents: false`).
+    private static func contentBoxNode(_ box: ContentBox) -> SCNNode {
+        let geometry = SCNBox(width: CGFloat(box.size.x),
+                              height: CGFloat(box.size.y),
+                              length: CGFloat(box.size.z), chamferRadius: 0.008)
+        geometry.materials = [contentMaterial()]
         let node = SCNNode(geometry: geometry)
+        node.simdPosition = box.center
         node.name = "content"
         return node
     }
@@ -204,7 +203,7 @@ enum RoomSceneBuilder {
 struct EmptyRoomSceneView: UIViewRepresentable {
     let room: CapturedRoom
     let contentMesh: [ContentMesh]
-    let contentPoints: [SIMD3<Float>]
+    let contentBoxes: [ContentBox]
     let showContents: Bool
 
     func makeUIView(context: Context) -> SCNView {
@@ -214,7 +213,7 @@ struct EmptyRoomSceneView: UIViewRepresentable {
         view.backgroundColor = .black
         view.antialiasingMode = .multisampling4X
         view.scene = RoomSceneBuilder.scene(from: room, includeContents: true,
-                                            contentMesh: contentMesh, contentPoints: contentPoints)
+                                            contentMesh: contentMesh, contentBoxes: contentBoxes)
         return view
     }
 

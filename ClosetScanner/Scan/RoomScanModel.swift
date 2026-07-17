@@ -13,10 +13,10 @@ struct ScanResult: Identifiable {
     /// LiDAR scene mesh of everything inside the closet that isn't
     /// architecture — the contents the show/hide toggle operates on.
     let contentMesh: [ContentMesh]
-    /// Dense per-pixel depth points that stand off the architecture — catches
-    /// the hanging clothes and floor shoes the decimated mesh loses. Rendered
-    /// alongside `contentMesh` under the same show/hide toggle.
-    let contentPoints: [SIMD3<Float>]
+    /// One bounding box per detected item, derived from the dense depth cloud —
+    /// catches the hanging clothes and floor shoes the decimated mesh loses, and
+    /// draws each as a clean box. Rendered under the same show/hide toggle.
+    let contentBoxes: [ContentBox]
 }
 
 /// Owns the RoomPlan capture session lifecycle and surfaces results to SwiftUI.
@@ -156,12 +156,12 @@ final class RoomScanModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
         let contents = meshSnapshot.map {
             ContentMeshExtractor.extractContents(from: $0, room: processedResult, metrics: metrics)
         } ?? []
-        let points = ContentMeshExtractor.extractContentPoints(points: depth.pointCloud(),
-                                                               room: processedResult, metrics: metrics)
-        print("[ClosetScanner] didPresent: filter ok — \(contents.count) mesh chunks, \(contents.reduce(0) { $0 + $1.indices.count / 3 }) triangles, \(points.count) depth points")
+        let boxes = ContentMeshExtractor.extractContentBoxes(points: depth.pointCloud(),
+                                                             room: processedResult, metrics: metrics)
+        print("[ClosetScanner] didPresent: filter ok — \(contents.count) mesh chunks, \(contents.reduce(0) { $0 + $1.indices.count / 3 }) triangles, \(boxes.count) item boxes")
         meshSnapshot = nil
         depth.reset()
         result = ScanResult(room: processedResult, metrics: metrics, kind: kind,
-                            requestedMode: mode, contentMesh: contents, contentPoints: points)
+                            requestedMode: mode, contentMesh: contents, contentBoxes: boxes)
     }
 }

@@ -14,6 +14,14 @@ struct ContentMesh {
     let indices: [Int32]        // triangles, 3 indices per face
 }
 
+/// A single detected item as a world-axis-aligned bounding box — one box per
+/// connected blob of content points. A pile of hanging clothes collapses to one
+/// big box; each shoe is its own small box; a shelf reads as a flat box.
+struct ContentBox {
+    let center: SIMD3<Float>
+    let size: SIMD3<Float>      // full extents (width, height, depth)
+}
+
 /// Raw per-anchor mesh data copied out of the ARSession the moment Finish is
 /// tapped — RoomPlan tears the session down during post-processing, so the
 /// snapshot has to happen before `stop()`.
@@ -63,6 +71,8 @@ enum ContentMeshExtractor {
     private static let clusterCell: Float = 0.04         // 4 cm — bridges LiDAR holes when grouping
     private static let minItemExtent: Float = 0.22       // longest blob edge must reach ~22 cm
     private static let minClusterCells: Int = 10         // and span at least this many cells
+    private static let boxMinThickness: Float = 0.04     // floor each box dimension so thin scans stay visible
+    private static let boxPadding: Float = 0.01          // small inflation so boxes fully wrap their points
 
     // MARK: Snapshot
 
@@ -207,9 +217,9 @@ enum ContentMeshExtractor {
     /// classification (a dense depth cloud has none) and never clips to the
     /// footprint polygon, so shoes the mesh merged into the floor and clothes
     /// RoomPlan buried in the back wall both survive.
-    static func extractContentPoints(points: [SIMD3<Float>],
-                                     room: CapturedRoom,
-                                     metrics: ClosetMetrics?) -> [SIMD3<Float>] {
+    static func extractContentBoxes(points: [SIMD3<Float>],
+                                    room: CapturedRoom,
+                                    metrics: ClosetMetrics?) -> [ContentBox] {
         guard !room.walls.isEmpty, !points.isEmpty else { return [] }
 
         // Vertical architecture only — floor/ceiling are handled by the height
@@ -258,14 +268,15 @@ enum ContentMeshExtractor {
             if isWallSkin(p) { continue }
             out.append(p)
         }
-        return keepLargeClusters(out)
+        return clusterBoxes(out)
     }
 
-    /// Connected-component filter: bins points into `clusterCell` cells, grows
-    /// blobs through 26-neighbour adjacency (so small LiDAR holes don't split an
-    /// item), and returns only the points belonging to blobs that are both big
+    /// Connected-component clustering: bins points into `clusterCell` cells,
+    /// grows blobs through 26-neighbour adjacency (so small LiDAR holes don't
+    /// split an item), and returns one bounding box per blob that is both big
     /// enough across (`minItemExtent`) and dense enough (`minClusterCells`).
-    private static func keepLargeClusters(_ points: [SIMD3<Float>]) -> [SIMD3<Float>] {
+    /// Each box is fit to the blob's actual points, not the coarse cell grid.
+    private static func clusterBoxes(_ points: [SIMD3<Float>]) -> [ContentBox] {
         guard !points.isEmpty else { return [] }
         let cell = clusterCell
 
@@ -287,19 +298,21 @@ enum ContentMeshExtractor {
         }
 
         var visited = Set<Int64>()
-        var kept: [SIMD3<Float>] = []
+        var boxes: [ContentBox] = []
         for start in cellPoints.keys where !visited.contains(start) {
             var stack = [start]
             visited.insert(start)
-            var blob: [Int64] = []
-            var lo = SIMD3<Int>(repeating: .max)
-            var hi = SIMD3<Int>(repeating: .min)
+            var cellCount = 0
+            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
 
             while let ck = stack.popLast() {
-                blob.append(ck)
+                cellCount += 1
+                for i in cellPoints[ck]! {          // tighten the box to real points
+                    lo = simd_min(lo, points[i])
+                    hi = simd_max(hi, points[i])
+                }
                 let c = cellCoord[ck]!
-                lo = simd_min(lo, c)
-                hi = simd_max(hi, c)
                 for dz in -1...1 { for dy in -1...1 { for dx in -1...1 {
                     if dx == 0 && dy == 0 && dz == 0 { continue }
                     let nk = key(c.x + dx, c.y + dy, c.z + dz)
@@ -310,12 +323,13 @@ enum ContentMeshExtractor {
                 }}}
             }
 
-            let span = SIMD3<Float>(Float(hi.x - lo.x), Float(hi.y - lo.y), Float(hi.z - lo.z)) * cell + cell
-            let longestEdge = max(span.x, max(span.y, span.z))
-            guard longestEdge >= minItemExtent, blob.count >= minClusterCells else { continue }
-            for ck in blob { for i in cellPoints[ck]! { kept.append(points[i]) } }
+            let extent = hi - lo
+            guard max(extent.x, max(extent.y, extent.z)) >= minItemExtent,
+                  cellCount >= minClusterCells else { continue }
+            let size = simd_max(extent, SIMD3(repeating: boxMinThickness)) + SIMD3(repeating: boxPadding)
+            boxes.append(ContentBox(center: (lo + hi) / 2, size: size))
         }
-        return kept
+        return boxes
     }
 
     /// Drops unreferenced vertices and remaps indices.
