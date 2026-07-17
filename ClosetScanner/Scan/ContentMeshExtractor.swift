@@ -42,6 +42,19 @@ enum ContentMeshExtractor {
     private static let ceilingClearance: Float = 0.03
     private static let bboxInset: Float = 0.01         // fallback clip when no closed footprint exists
 
+    // Protrusion filter tunables (dense point-cloud path, `extractContentPoints`).
+    // Contents are positive space that stands *off* the architecture, so we drop
+    // only a thin skin around each wall/floor/ceiling and keep everything else
+    // inside the closet volume. A flat painted wall's depth samples sit within a
+    // couple cm of its fitted plane and get dropped; a bumpy garment surface
+    // scatters well past `pointWallSkin`, so most of it survives even when
+    // RoomPlan fit the "wall" to the front face of packed clothes.
+    private static let pointWallSkin: Float = 0.03       // 3 cm around vertical planes
+    private static let pointRectMargin: Float = 0.10     // tolerance past a plane's edges
+    private static let pointFloorStandoff: Float = 0.04  // keep points ≥4 cm above the floor (shoes)
+    private static let pointCeilingClearance: Float = 0.05
+    private static let pointContentReach: Float = 0.10   // keep points this far outside the wall bbox
+
     // MARK: Snapshot
 
     /// Copies every `ARMeshAnchor` out of the session's current frame.
@@ -173,6 +186,68 @@ enum ContentMeshExtractor {
             if !kept.isEmpty {
                 out.append(compacted(vertices: anchor.vertices, indices: kept))
             }
+        }
+        return out
+    }
+
+    // MARK: Protrusion filter (dense point cloud)
+
+    /// Keeps the accumulated LiDAR depth points that are inside the closet but
+    /// stand off its architecture — the positive-space counterpart to
+    /// `extractContents`. Unlike the mesh path this never trusts a per-face
+    /// classification (a dense depth cloud has none) and never clips to the
+    /// footprint polygon, so shoes the mesh merged into the floor and clothes
+    /// RoomPlan buried in the back wall both survive.
+    static func extractContentPoints(points: [SIMD3<Float>],
+                                     room: CapturedRoom,
+                                     metrics: ClosetMetrics?) -> [SIMD3<Float>] {
+        guard !room.walls.isEmpty, !points.isEmpty else { return [] }
+
+        // Vertical architecture only — floor/ceiling are handled by the height
+        // band below, so a low object resting on the floor is never mistaken
+        // for the floor plane itself.
+        struct Plane { let inv: simd_float4x4; let hx: Float; let hy: Float }
+        let verticalSurfaces = room.walls + room.doors + room.windows + room.openings
+        let planes = verticalSurfaces.map {
+            Plane(inv: $0.transform.inverse, hx: $0.dimensions.x / 2, hy: $0.dimensions.y / 2)
+        }
+
+        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for wall in room.walls {
+            let hw = wall.dimensions.x / 2, hh = wall.dimensions.y / 2
+            for sx in [-hw, hw] {
+                for sy in [-hh, hh] {
+                    let c = wall.transform * SIMD4<Float>(sx, sy, 0, 1)
+                    lo = simd_min(lo, SIMD3(c.x, c.y, c.z))
+                    hi = simd_max(hi, SIMD3(c.x, c.y, c.z))
+                }
+            }
+        }
+
+        func isWallSkin(_ p: SIMD3<Float>) -> Bool {
+            for plane in planes {
+                let local = plane.inv * SIMD4<Float>(p, 1)
+                if abs(local.z) < pointWallSkin,
+                   abs(local.x) < plane.hx + pointRectMargin,
+                   abs(local.y) < plane.hy + pointRectMargin {
+                    return true
+                }
+            }
+            return false
+        }
+
+        var out: [SIMD3<Float>] = []
+        out.reserveCapacity(points.count)
+        for p in points {
+            // Above the floor skin, below the ceiling.
+            guard p.y > lo.y + pointFloorStandoff, p.y < hi.y - pointCeilingClearance else { continue }
+            // Inside the wall bbox, inflated outward so clothes sitting behind a
+            // wall RoomPlan fit to their front face are still kept.
+            guard p.x > lo.x - pointContentReach, p.x < hi.x + pointContentReach,
+                  p.z > lo.z - pointContentReach, p.z < hi.z + pointContentReach else { continue }
+            if isWallSkin(p) { continue }
+            out.append(p)
         }
         return out
     }
