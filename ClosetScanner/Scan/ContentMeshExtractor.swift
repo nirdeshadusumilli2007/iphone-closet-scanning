@@ -31,10 +31,15 @@ enum ContentMeshExtractor {
     // Sensitivity tunables. A mesh triangle counts as *contents* unless it is
     // within `wallClearance` of a captured wall/door/window/opening/floor
     // surface, or hugs the floor/ceiling, or falls outside the footprint.
-    private static let wallClearance: Float = 0.06     // 6 cm — keeps hanging clothes, drops the wall skin
-    private static let floorClearance: Float = 0.04
-    private static let ceilingClearance: Float = 0.08
-    private static let bboxInset: Float = 0.03         // fallback clip when no closed footprint exists
+    //
+    // High-sensitivity preset: tighter clearances keep more real contents —
+    // flat shoes on the floor and items pressed close to the walls — at the cost
+    // of occasionally leaving a little wall/floor mesh noise. Going below ~2 cm
+    // is where the wall/floor skin starts leaking in as fake contents.
+    private static let wallClearance: Float = 0.03     // 3 cm — keeps wall-hugging clothes/shelves
+    private static let floorClearance: Float = 0.02    // 2 cm — keeps flat shoes
+    private static let ceilingClearance: Float = 0.05
+    private static let bboxInset: Float = 0.02         // fallback clip when no closed footprint exists
 
     // MARK: Snapshot
 
